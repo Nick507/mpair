@@ -87,17 +87,17 @@ mpair IP[:PORT] <command> [args]
 
 ```bash
 # Upload files
-mpair 10.10.10.113 put main.py boot.py
+mpair 192.168.0.113 put main.py boot.py
 
 # List files
-mpair 10.10.10.113 ls
+mpair 192.168.0.113 ls
 
 # Stream logs: enable on device, then listen on PC
-mpair 10.10.10.113 logger 10.10.10.10:6000
+mpair 192.168.0.113 logger 192.168.0.10:6000
 mpair listen 6000
 
 # Reset device
-mpair 10.10.10.113 reset
+mpair 192.168.0.113 reset
 ```
 
 # TODO
