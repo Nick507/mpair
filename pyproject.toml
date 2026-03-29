@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mpair"
+version = "1.0.0"
+description = "MicroPython Air: Wi-Fi management for ESP32-C3"
+readme = "readme.md"
+requires-python = ">=3.7"
+license = "MIT"  # Fixed: Use a string, not a table
+authors = [{name = "Nick507"}]
+
+[project.scripts]
+mpair = "mpair:main"
+
+[tool.setuptools]
+# Fixed: Explicitly tell it to only look at mpair.py
+py-modules = ["mpair"] 

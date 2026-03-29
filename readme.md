@@ -27,6 +27,24 @@ Tested on **ESP32-C3**.
 
 # How to install
 
+**Install the PC tool:**
+
+```bash
+pip install mpair
+```
+
+Or from source:
+
+```bash
+pip install .
+```
+
+After installing, the `mpair` command becomes available directly:
+
+```bash
+mpair IP <command> [args]
+```
+
 **On the device** — upload `mpairserver.py` using any method:
 
 ```
@@ -51,7 +69,7 @@ mpairserver.start("SSID", "PASSWORD", logger="192.168.1.100:6000")
 # How to use
 
 ```
-python mpair.py IP[:PORT] <command> [args]
+mpair IP[:PORT] <command> [args]
 ```
 
 | Command | Description |
@@ -69,17 +87,17 @@ python mpair.py IP[:PORT] <command> [args]
 
 ```bash
 # Upload files
-python mpair.py 10.10.10.113 put main.py boot.py
+mpair 10.10.10.113 put main.py boot.py
 
 # List files
-python mpair.py 10.10.10.113 ls
+mpair 10.10.10.113 ls
 
 # Stream logs: enable on device, then listen on PC
-python mpair.py 10.10.10.113 logger 10.10.10.10:6000
-python mpair.py listen 6000
+mpair 10.10.10.113 logger 10.10.10.10:6000
+mpair listen 6000
 
 # Reset device
-python mpair.py 10.10.10.113 reset
+mpair 10.10.10.113 reset
 ```
 
 # TODO

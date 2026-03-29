@@ -536,4 +536,5 @@ def main():
         print_help()
         sys.exit(1)
 
-main()
+if __name__ == "__main__":
+    main()
