@@ -266,7 +266,7 @@ except Exception as e:
         
         if response and response.get('status') == 'success':
             file_size = response['size']
-            print(f"Pulling {filename} ({file_size} bytes)...")
+            print(f"Getting {filename} ({file_size} bytes)...", end="")
             
             # 3. Receive the RAW bytes directly from the socket
             with open(filename, 'wb') as f:
@@ -276,7 +276,7 @@ except Exception as e:
                     if not chunk: break
                     f.write(chunk)
                     remaining -= len(chunk)
-            print(f"Downloaded {filename} successfully.")
+            print("OK")
         else:
             print(f"Error: {response.get('msg', 'Unknown error')}")
 
