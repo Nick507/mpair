@@ -105,5 +105,6 @@ mpair 10.10.10.113 reset
 - Improve error handling
 - Support `src dst` paths for `get` and `put`
 - Add flag to keep bootmode, and 'exit' command
+- Add API for user app to be able to run logger
 - Support input for stdin?
 - Secure operations?
