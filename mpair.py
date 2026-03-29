@@ -5,6 +5,8 @@ import json
 import struct
 import os
 import textwrap
+import glob
+import fnmatch
 
 ESP_IP = None
 PORT = 8267  # default UDP command port
@@ -373,7 +375,7 @@ def print_file_list(files):
 
 ##########################################################################################
 
-def list_files():
+def fetch_file_list():
     code = textwrap.dedent(f"""
         import json, struct
         res = []
@@ -392,13 +394,44 @@ def list_files():
         conn.sendall(struct.pack('>I', len(data)) + data)
     """).strip()
     send_code(code)
-    
+
     response = receive_response()
-    
+
     if response and response['status'] == 'ok':
-        print_file_list(response['files'])
+        return response['files']
+    return None
+
+def list_files():
+    files = fetch_file_list()
+    if files is not None:
+        print_file_list(files)
     else:
         print("Error fetching file list.")
+
+##########################################################################################
+
+def expand_local_patterns(patterns):
+    expanded = []
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            expanded.extend(matches)
+        else:
+            expanded.append(pattern)  # let it fail naturally with a clear error
+    return expanded
+
+def expand_remote_patterns(patterns, remote_files):
+    names = [f['name'] for f in remote_files if not f['name'].endswith('/')]
+    expanded = []
+    for pattern in patterns:
+        if any(c in pattern for c in ('*', '?', '[')):
+            matches = fnmatch.filter(names, pattern)
+            if not matches:
+                print(f"Warning: no remote files match '{pattern}'")
+            expanded.extend(matches)
+        else:
+            expanded.append(pattern)
+    return expanded
 
 ##########################################################################################
 
@@ -488,10 +521,11 @@ def main():
         if not args:
             print("Usage: put <file> [file...]")
             sys.exit(1)
+        files = expand_local_patterns(args)
         if not enter_bootmode():
             print("Failed to enter bootmode")
             sys.exit(1)
-        put_files_and_commit(args)
+        put_files_and_commit(files)
         exit_bootmode()
 
     elif cmd == 'get':
@@ -501,7 +535,13 @@ def main():
         if not enter_bootmode():
             print("Failed to enter bootmode")
             sys.exit(1)
-        get_files(args)
+        remote_files = fetch_file_list()
+        if remote_files is None:
+            print("Failed to fetch remote file list")
+            sys.exit(1)
+        files = expand_remote_patterns(args, remote_files)
+        if files:
+            get_files(files)
         exit_bootmode()
 
     elif cmd == 'ls':
