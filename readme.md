@@ -17,7 +17,7 @@
 
 mpair uses a two-channel approach:
 
-- **UDP** (be default, port 8267) — for out-of-band commands: `reset`, `boot mode`, `logger control`. Handled by a background timer on the ESP, so it works even while `main.py` is running.
+- **UDP** (by default, port 8267) — for out-of-band commands: `reset`, `boot mode`, `logger control`. Handled by a background timer on the ESP, so it works even while `main.py` is running.
 - **TCP** (UDP port + 1) — for file operations. The PC triggers a reboot into *boot mode*, connects over TCP, and sends Python snippets that execute directly on the ESP via `exec()`. After all operations are done, the device resets back to normal mode. Boot mode is signaled by the presence of a `.bootmode` marker file on the device filesystem — `mpairserver` creates it before rebooting and deletes it on exit, so a crash or power loss during a session won't leave the device stuck.
 - **UDP log streaming** — `os.dupterm()` redirects MicroPython's stdout to UDP packets, which the PC receives with the `listen` command.
 
