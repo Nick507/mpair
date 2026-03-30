@@ -371,10 +371,33 @@ def print_file_list(files):
 
 ##########################################################################################
 
+def print_filesystem_tail(total, free):
+    print("-" * 42)
+    if total is not None and free is not None:
+        used = total - free
+        if used < 0:
+            used = 0
+        print(f"Filesystem: {total:,} bytes total, {free:,} bytes free ({used:,} used)")
+    else:
+        print("Filesystem: total/free unavailable (statvfs)")
+
+##########################################################################################
+
 def fetch_file_list(path='.'):
     code = textwrap.dedent(f"""
         import json, struct
         path = '{path}'
+        def vfs_space(p):
+            try:
+                s = os.statvfs(p if p != '.' else '/')
+            except OSError:
+                try:
+                    s = os.statvfs('.')
+                except OSError:
+                    return None, None
+            mult = s[1] or s[0]
+            bavail = s[4] if len(s) > 4 else s[3]
+            return mult * s[2], mult * bavail
         try:
             res = []
             for e in os.ilistdir(path):
@@ -385,7 +408,12 @@ def fetch_file_list(path='.'):
                 else:
                     size = e[3] if len(e) > 3 else os.stat(path + '/' + name)[6]
                 res.append({{'name': name, 'size': size}})
-            data = json.dumps({{'status': 'ok', 'files': res}}).encode()
+            pkg = {{'status': 'ok', 'files': res}}
+            total, free = vfs_space(path)
+            if total is not None and free is not None:
+                pkg['total'] = total
+                pkg['free'] = free
+            data = json.dumps(pkg).encode()
         except OSError as e:
             data = json.dumps({{'status': 'error', 'msg': str(e)}}).encode()
         conn.sendall(struct.pack('>I', len(data)) + data)
@@ -395,23 +423,25 @@ def fetch_file_list(path='.'):
     response = receive_response()
 
     if response and response.get('status') == 'ok':
-        return response['files']
+        return response
     if response and response.get('msg'):
         print(f"Error: {response['msg']}")
     return None
 
 def list_files(path='.'):
-    files = fetch_file_list(path)
-    if files is not None:
+    result = fetch_file_list(path)
+    if result is not None:
         if path != '.':
             print(f"{path}:")
-        print_file_list(files)
+        print_file_list(result['files'])
+        print_filesystem_tail(result.get('total'), result.get('free'))
 
 ##########################################################################################
 
 def tree(path='.'):
     code = textwrap.dedent(f"""
         import json, struct
+        root = '{path}'
         def walk(path):
             entries = []
             for e in os.ilistdir(path):
@@ -422,8 +452,25 @@ def tree(path='.'):
                     size = e[3] if len(e) > 3 else os.stat(path + '/' + name)[6]
                     entries.append({{'name': name, 'size': size}})
             return entries
+        def vfs_space(p):
+            try:
+                s = os.statvfs(p if p != '.' else '/')
+            except OSError:
+                try:
+                    s = os.statvfs('.')
+                except OSError:
+                    return None, None
+            mult = s[1] or s[0]
+            bavail = s[4] if len(s) > 4 else s[3]
+            return mult * s[2], mult * bavail
         try:
-            data = json.dumps({{'status': 'ok', 'tree': walk('{path}')}}).encode()
+            t = walk(root)
+            pkg = {{'status': 'ok', 'tree': t}}
+            total, free = vfs_space(root)
+            if total is not None and free is not None:
+                pkg['total'] = total
+                pkg['free'] = free
+            data = json.dumps(pkg).encode()
         except OSError as e:
             data = json.dumps({{'status': 'error', 'msg': str(e)}}).encode()
         conn.sendall(struct.pack('>I', len(data)) + data)
@@ -433,6 +480,7 @@ def tree(path='.'):
 
     if response and response.get('status') == 'ok':
         print_tree(response['tree'], "")
+        print_filesystem_tail(response.get('total'), response.get('free'))
     elif response and response.get('msg'):
         print(f"Error: {response['msg']}")
     else:
