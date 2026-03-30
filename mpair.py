@@ -5,8 +5,6 @@ import json
 import struct
 import os
 import textwrap
-import glob
-import fnmatch
 
 ESP_IP = None
 PORT = 8267  # default UDP command port
@@ -22,7 +20,7 @@ def send_udp_command(data):
 
 def udp_reset():
     global tcp_socket
-    print("Restarting via UPD command...")
+    print("Restarting via UDP command...")
     send_udp_command(b"reset")
 
 ##########################################################################################
@@ -65,15 +63,14 @@ def receive_response():
 
 ##########################################################################################
 
-def connect_to_server():
+def connect_to_server(timeout=5.0):
     global tcp_socket
 
     try:
         tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp_socket.settimeout(5.0)
+        tcp_socket.settimeout(timeout)
         tcp_socket.connect((ESP_IP, PORT + 1))
     except Exception as e:
-        print(f"Failed to connect to mpair server: {e}")
         tcp_socket = None
         return False
 
@@ -81,15 +78,28 @@ def connect_to_server():
 
 ##########################################################################################
 
-def enter_bootmode():
+def enter_bootmode(hold=False):
     global tcp_socket
+
+    if hold:
+        print("Connecting...", end="")
+        sys.stdout.flush()
+        if connect_to_server(timeout=1.0): # short timeout to check if already in bootmode
+            send_code("conn.sendall('OK'.encode())")
+            response = tcp_socket.recv(2)
+            if response == b'OK':
+                print("OK (already in bootmode)")
+                return True
+            print("MALFORMED RESPONSE")
+            return False
 
     print("Entering bootmode...", end="")
     sys.stdout.flush()
     send_udp_command(b"boot")
-    time.sleep(3) # Give ESP32-C3 time to reboot into Loader Mode
+    time.sleep(3)
     
     if not connect_to_server():
+        print("FAIL")
         return False
 
     send_code("conn.sendall('OK'.encode())")
@@ -133,18 +143,22 @@ def exit_bootmode():
 
 ##########################################################################################
 
-def put_files(files_to_put):
-    for filename in files_to_put:
-        file_size = os.path.getsize(filename)
-        print(f"Pushing {filename} ({file_size} bytes)...")
+def put_file(local_file, remote_file):
+    file_size = os.path.getsize(local_file)
+    print(f"Pushing {local_file} -> {remote_file} ({file_size} bytes)...")
 
-        # 1. Send the 'Receiver' script to the ESP
-        # This script runs on the ESP and waits for raw bytes on 'conn'
-        code = f"""
+    code = f"""
 import os, struct, json
-filename = '{filename}.upload'
+filename = '{remote_file}.upload'
 size = {file_size}
-print(f"Receiving {filename} ({file_size} bytes)...")
+
+# Ensure parent directories exist
+parts = filename.replace('\\\\', '/').split('/')
+for i in range(1, len(parts)):
+    d = '/'.join(parts[:i])
+    try: os.mkdir(d)
+    except OSError: pass
+
 with open(filename, 'wb') as f:
     remaining = size
     while remaining > 0:
@@ -153,103 +167,76 @@ with open(filename, 'wb') as f:
         f.write(chunk)
         remaining -= len(chunk)
 
-# Send confirmation back
 res = json.dumps({{'status': 'ok', 'file': filename}}).encode()
 conn.sendall(struct.pack('>I', len(res)) + res)
 """.strip()
 
-        # Send the script
-        send_code(code)
+    send_code(code)
 
-        # 2. Send the RAW bytes (not as code, just as data)
-        with open(filename, 'rb') as f:
-            while True:
-                chunk = f.read(4096)
-                if not chunk: break
-                tcp_socket.sendall(chunk)
+    with open(local_file, 'rb') as f:
+        while True:
+            chunk = f.read(4096)
+            if not chunk: break
+            tcp_socket.sendall(chunk)
 
-        # 3. Wait for the ESP to finish writing and confirm
-        response = receive_response()
-        if response and response['status'] == 'ok':
-            print(f"Uploaded {filename} successfully.")
-        else:
-            print(f"Failed to upload {filename}.")
-            return False
+    response = receive_response()
+    if response and response['status'] == 'ok':
+        print(f"Uploaded {remote_file} successfully.")
+    else:
+        print(f"Failed to upload {remote_file}.")
+        return False
     return True
 
 ##########################################################################################
 
-def commit_files(files_to_commit):
-    # Convert the list to a string representation for the injected code
-    files_repr = repr(files_to_commit)
-    
+def commit_file(remote_file):
     code = textwrap.dedent(f"""
         import os, json, struct
-        targets = {files_repr}
-        committed = []
-        for filename in targets:
-            upload_name = filename + ".upload"
-            try:
-                # Ensure the temp file exists
-                os.stat(upload_name)
-                # Remove old version if it exists
-                try: os.remove(filename)
-                except: pass
-                # Atomically rename
-                os.rename(upload_name, filename)
-                committed.append(filename)
-            except OSError:
-                pass
-        
-        # Send back the results
-        res = json.dumps({{'status': 'success', 'committed': committed}}).encode()
+        filename = '{remote_file}'
+        upload_name = filename + ".upload"
+        try:
+            os.stat(upload_name)
+            try: os.remove(filename)
+            except: pass
+            os.rename(upload_name, filename)
+            res = json.dumps({{'status': 'success', 'committed': filename}}).encode()
+        except OSError:
+            res = json.dumps({{'status': 'error', 'msg': upload_name + ' not found'}}).encode()
         conn.sendall(struct.pack('>I', len(res)) + res)
     """).strip()
 
-    # 1. Send the commit logic
     send_code(code)
-    
-    # 2. Wait for the confirmation
     response = receive_response()
-    
+
     if response and response['status'] == 'success':
-        for f in response['committed']:
-            print(f"Committed: {f}")
-        
-        # Check if anything was missing
-        missed = set(files_to_commit) - set(response['committed'])
-        for f in missed:
-            print(f"Warning: {f}.upload not found, could not commit.")
+        print(f"Committed: {response['committed']}")
     else:
-        print("Error: Commit operation failed.")
+        print(f"Error: Could not commit {remote_file}: {response.get('msg', 'unknown')}")
         return False
     return True
 
 ##########################################################################################
 
-def put_files_and_commit(files_to_put_and_commit):
-    if not put_files(files_to_put_and_commit):
+def put_file_and_commit(local_file, remote_file):
+    if not put_file(local_file, remote_file):
         return False
-    if not commit_files(files_to_put_and_commit):
+    if not commit_file(remote_file):
         return False
     return True
 
 ##########################################################################################
 
-def get_files(files_to_get):
-    for filename in files_to_get:
-        # 1. Send the 'Sender' script to the ESP
-        # This script opens the file and sends [4-byte JSON size][JSON header][Raw Bytes]
-        code = f"""
+def get_file(remote_file, local_file):
+    code = f"""
 import os, struct, json
-filename = '{filename}'
+filename = '{remote_file}'
 try:
-    size = os.stat(filename)[6]
-    # Send success header
+    st = os.stat(filename)
+    if st[0] & 0x4000:
+        raise OSError("is a directory")
+    size = st[6]
     res = json.dumps({{'status': 'success', 'size': size}}).encode()
     conn.sendall(struct.pack('>I', len(res)) + res)
-    
-    # Send raw binary data
     with open(filename, 'rb') as f:
         while True:
             chunk = f.read(1024)
@@ -260,64 +247,74 @@ except Exception as e:
     conn.sendall(struct.pack('>I', len(res)) + res)
 """.strip()
 
-        send_code(code)
+    send_code(code)
+    response = receive_response()
 
-        # 2. Receive the JSON header from ESP
-        response = receive_response()
-        
-        if response and response.get('status') == 'success':
-            file_size = response['size']
-            print(f"Getting {filename} ({file_size} bytes)...", end="")
-            
-            # 3. Receive the RAW bytes directly from the socket
-            with open(filename, 'wb') as f:
-                remaining = file_size
-                while remaining > 0:
-                    chunk = tcp_socket.recv(min(remaining, 4096))
-                    if not chunk: break
-                    f.write(chunk)
-                    remaining -= len(chunk)
-            print("OK")
-        else:
-            print(f"Error: {response.get('msg', 'Unknown error')}")
+    if response and response.get('status') == 'success':
+        file_size = response['size']
+        print(f"Getting {remote_file} -> {local_file} ({file_size} bytes)...", end="")
+
+        parent = os.path.dirname(local_file)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        with open(local_file, 'wb') as f:
+            remaining = file_size
+            while remaining > 0:
+                chunk = tcp_socket.recv(min(remaining, 4096))
+                if not chunk: break
+                f.write(chunk)
+                remaining -= len(chunk)
+        print("OK")
+    else:
+        print(f"Error: {response.get('msg', 'Unknown error')}")
+        return False
+    return True
 
 ##########################################################################################
 
 def delete_files(files_to_delete):
-    # Convert Python list to a string representation for the 'code' block
     files_repr = repr(files_to_delete)
     
     code = textwrap.dedent(f"""
         import os, json, struct
         targets = {files_repr}
         results = []
+        errors = []
+
+        def rmtree(path):
+            for e in os.ilistdir(path):
+                name, mode = e[0], e[1]
+                full = path + '/' + name
+                if mode & 0x4000:
+                    rmtree(full)
+                else:
+                    os.remove(full)
+            os.rmdir(path)
+
         for f in targets:
             try:
-                os.remove(f)
+                mode = os.stat(f)[0]
+                if mode & 0x4000:
+                    rmtree(f)
+                else:
+                    os.remove(f)
                 results.append(f)
-            except OSError:
-                pass # File didn't exist or was a directory
+            except OSError as e:
+                errors.append({{'name': f, 'msg': str(e)}})
         
-        # Package the result
-        data = json.dumps({{'status': 'ok', 'deleted': results}}).encode()
+        data = json.dumps({{'status': 'ok', 'deleted': results, 'errors': errors}}).encode()
         conn.sendall(struct.pack('>I', len(data)) + data)
     """).strip()
 
-    # 1. Send the 'exec' logic
     send_code(code)
-    
-    # 2. Receive the structured response
     response = receive_response()
-    
-    # 3. Print the outcome
+
     if response and response['status'] == 'ok':
         for f in response['deleted']:
             print(f"Deleted: {f}")
-        
-        # Check if any files failed to delete
-        failed = set(files_to_delete) - set(response['deleted'])
-        for f in failed:
-            print(f"Failed (not found): {f}")
+        for e in response['errors']:
+            print(f"Failed: {e['name']}: {e['msg']}")
     else:
         print("Error: Could not execute delete command.")
 
@@ -374,78 +371,107 @@ def print_file_list(files):
 
 ##########################################################################################
 
-def fetch_file_list():
+def fetch_file_list(path='.'):
     code = textwrap.dedent(f"""
         import json, struct
-        res = []
-        for e in os.ilistdir('.'):
-            name, mode = e[0], e[1]
-            if mode & 0x4000:
-                name += '/'
-                size = 0
-            else:
-                # ilistdir index 3 is size, if missing use stat
-                size = e[3] if len(e) > 3 else os.stat(name)[6]
-            res.append({{'name': name, 'size': size}})
-            
-        # Manually package the response with size prefix
-        data = json.dumps({{'status': 'ok', 'files': res}}).encode()
+        path = '{path}'
+        try:
+            res = []
+            for e in os.ilistdir(path):
+                name, mode = e[0], e[1]
+                if mode & 0x4000:
+                    name += '/'
+                    size = 0
+                else:
+                    size = e[3] if len(e) > 3 else os.stat(path + '/' + name)[6]
+                res.append({{'name': name, 'size': size}})
+            data = json.dumps({{'status': 'ok', 'files': res}}).encode()
+        except OSError as e:
+            data = json.dumps({{'status': 'error', 'msg': str(e)}}).encode()
         conn.sendall(struct.pack('>I', len(data)) + data)
     """).strip()
     send_code(code)
 
     response = receive_response()
 
-    if response and response['status'] == 'ok':
+    if response and response.get('status') == 'ok':
         return response['files']
+    if response and response.get('msg'):
+        print(f"Error: {response['msg']}")
     return None
 
-def list_files():
-    files = fetch_file_list()
+def list_files(path='.'):
+    files = fetch_file_list(path)
     if files is not None:
+        if path != '.':
+            print(f"{path}:")
         print_file_list(files)
-    else:
-        print("Error fetching file list.")
 
 ##########################################################################################
 
-def expand_local_patterns(patterns):
-    expanded = []
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            expanded.extend(matches)
-        else:
-            expanded.append(pattern)  # let it fail naturally with a clear error
-    return expanded
+def tree(path='.'):
+    code = textwrap.dedent(f"""
+        import json, struct
+        def walk(path):
+            entries = []
+            for e in os.ilistdir(path):
+                name, mode = e[0], e[1]
+                if mode & 0x4000:
+                    entries.append({{'name': name, 'children': walk(path + '/' + name)}})
+                else:
+                    size = e[3] if len(e) > 3 else os.stat(path + '/' + name)[6]
+                    entries.append({{'name': name, 'size': size}})
+            return entries
+        try:
+            data = json.dumps({{'status': 'ok', 'tree': walk('{path}')}}).encode()
+        except OSError as e:
+            data = json.dumps({{'status': 'error', 'msg': str(e)}}).encode()
+        conn.sendall(struct.pack('>I', len(data)) + data)
+    """).strip()
+    send_code(code)
+    response = receive_response()
 
-def expand_remote_patterns(patterns, remote_files):
-    names = [f['name'] for f in remote_files if not f['name'].endswith('/')]
-    expanded = []
-    for pattern in patterns:
-        if any(c in pattern for c in ('*', '?', '[')):
-            matches = fnmatch.filter(names, pattern)
-            if not matches:
-                print(f"Warning: no remote files match '{pattern}'")
-            expanded.extend(matches)
+    if response and response.get('status') == 'ok':
+        print_tree(response['tree'], "")
+    elif response and response.get('msg'):
+        print(f"Error: {response['msg']}")
+    else:
+        print("Error fetching tree.")
+
+def print_tree(entries, prefix):
+    dirs = sorted([e for e in entries if 'children' in e], key=lambda e: e['name'].lower())
+    files = sorted([e for e in entries if 'children' not in e], key=lambda e: e['name'].lower())
+    items = dirs + files
+    for i, entry in enumerate(items):
+        is_last = (i == len(items) - 1)
+        connector = "└── " if is_last else "├── "
+        if 'children' in entry:
+            print(f"{prefix}{connector}{entry['name']}/")
+            extension = "    " if is_last else "│   "
+            print_tree(entry['children'], prefix + extension)
         else:
-            expanded.append(pattern)
-    return expanded
+            size = f"{entry['size']:,}"
+            print(f"{prefix}{connector}{entry['name']}  ({size})")
 
 ##########################################################################################
 
 def print_help():
-    print("Usage: python mpair.py IP[:PORT] <command> [args]")
+    print("Usage: python mpair.py IP[:PORT] <command> [args] [--hold]")
     print()
     print("Commands:")
-    print("  reset                  Reset the device")
-    print("  put <file> [file...]   Upload file(s) to the device")
-    print("  get <file> [file...]   Download file(s) from the device")
-    print("  ls                     List files on the device")
-    print("  rm <file> [file...]    Delete file(s) from the device")
-    print("  mkdir <dir> [dir...]   Create directory(s) on the device")
-    print("  logger [IP:PORT]       Enable remote logger (or disable, if no [IP:PORT] provided)")
-    print("  listen PORT            Listen for UDP log messages on PORT")
+    print("  reset                           Reset the device")
+    print("  put <local_file> [remote_file]  Upload a file to the device")
+    print("  get <remote_file> [local_file]  Download a file from the device")
+    print("  ls [dir]                        List files on the device")
+    print("  tree [dir]                      Show file tree recursively")
+    print("  rm <file> [file...]             Delete file(s) from the device")
+    print("  mkdir <dir> [dir...]            Create directory(s) on the device")
+    print("  exit                            Leave boot mode and reboot to normal mode")
+    print("  logger [IP:PORT]                Enable remote logger (or disable, if no [IP:PORT] provided)")
+    print("  listen PORT                     Listen for UDP log messages on PORT")
+    print()
+    print("Options:")
+    print("  --hold   Keep device in bootmode after command (skip reboot)")
 
 ##########################################################################################
 
@@ -483,25 +509,27 @@ def parse_address(addr_str):
 def main():
     global ESP_IP, PORT
 
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help', 'help'):
-        print_help()
-        sys.exit(0 if len(sys.argv) > 1 else 1)
+    argv = [a for a in sys.argv[1:] if a != '--hold']
+    hold = len(argv) < len(sys.argv) - 1
 
-    # 'listen' doesn't need a device IP
-    if sys.argv[1] == 'listen':
-        if len(sys.argv) != 3:
+    if not argv or argv[0] in ('-h', '--help', 'help'):
+        print_help()
+        sys.exit(0 if argv else 1)
+
+    if argv[0] == 'listen':
+        if len(argv) != 2:
             print("Usage: listen PORT")
             sys.exit(1)
-        listen_udp_logs(int(sys.argv[2]))
+        listen_udp_logs(int(argv[1]))
         return
 
-    if len(sys.argv) < 3:
+    if len(argv) < 2:
         print_help()
         sys.exit(1)
 
-    ESP_IP, PORT = parse_address(sys.argv[1])
-    cmd = sys.argv[2]
-    args = sys.argv[3:]
+    ESP_IP, PORT = parse_address(argv[0])
+    cmd = argv[1]
+    args = argv[2:]
 
     if cmd == 'reset':
         udp_reset()
@@ -518,51 +546,75 @@ def main():
 
     elif cmd == 'put':
         if not args:
-            print("Usage: put <file> [file...]")
+            print("Usage: put <local_file> [remote_file]")
             sys.exit(1)
-        files = expand_local_patterns(args)
-        if not enter_bootmode():
+        local_file = args[0].replace('\\', '/')
+        remote_file = args[1].replace('\\', '/') if len(args) > 1 else local_file
+        if remote_file.endswith('/'):
+            remote_file += os.path.basename(local_file)
+        if not os.path.isfile(local_file):
+            print(f"Error: local file '{local_file}' not found.")
             sys.exit(1)
-        put_files_and_commit(files)
-        exit_bootmode()
+        if not enter_bootmode(hold):
+            sys.exit(1)
+        put_file_and_commit(local_file, remote_file)
+        if not hold:
+            exit_bootmode()
 
     elif cmd == 'get':
         if not args:
-            print("Usage: get <file> [file...]")
+            print("Usage: get <remote_file> [local_file]")
             sys.exit(1)
-        if not enter_bootmode():
+        remote_file = args[0].replace('\\', '/')
+        local_file = args[1] if len(args) > 1 else remote_file
+        if local_file.endswith('/') or os.path.isdir(local_file):
+            local_file = os.path.join(local_file, os.path.basename(remote_file))
+        if not enter_bootmode(hold):
             sys.exit(1)
-        remote_files = fetch_file_list()
-        if remote_files is None:
-            print("Failed to fetch remote file list")
-            sys.exit(1)
-        files = expand_remote_patterns(args, remote_files)
-        if files:
-            get_files(files)
-        exit_bootmode()
+        get_file(remote_file, local_file)
+        if not hold:
+            exit_bootmode()
 
     elif cmd == 'ls':
-        if not enter_bootmode():
+        if not enter_bootmode(hold):
             sys.exit(1)
-        list_files()
-        exit_bootmode()
+        list_files(args[0].replace('\\', '/').rstrip('/') if args else '.')
+        if not hold:
+            exit_bootmode()
+
+    elif cmd == 'tree':
+        if not enter_bootmode(hold):
+            sys.exit(1)
+        tree(args[0].replace('\\', '/').rstrip('/') if args else '.')
+        if not hold:
+            exit_bootmode()
 
     elif cmd == 'rm':
         if not args:
             print("Usage: rm <file> [file...]")
             sys.exit(1)
-        if not enter_bootmode():
+        if not enter_bootmode(hold):
             sys.exit(1)
         delete_files(args)
-        exit_bootmode()
+        if not hold:
+            exit_bootmode()
 
     elif cmd == 'mkdir':
         if not args:
             print("Usage: mkdir <dir> [dir...]")
             sys.exit(1)
-        if not enter_bootmode():
+        if not enter_bootmode(hold):
             sys.exit(1)
         make_dirs(args)
+        if not hold:
+            exit_bootmode()
+
+    elif cmd == 'exit':
+        if args:
+            print("Usage: exit")
+            sys.exit(1)
+        if not enter_bootmode(True): # suppose that the device is in bootmode
+            sys.exit(1)
         exit_bootmode()
 
     else:

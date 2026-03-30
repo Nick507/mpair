@@ -12,6 +12,8 @@
 - UDP log streaming that doesn't block or hang the device
 - Stable device reset with boot-mode handshake
 - Simple CLI — no daemons, no config files
+- Atomic file uploads — files are first written as `.upload` temporaries, then renamed in a separate commit step. If the connection drops mid-transfer, the original file remains intact
+- **`--hold` mode** — keeps the device in boot mode between commands. The client reconnects over TCP immediately (no UDP boot + 3s wait each time), so you can run many file operations in a row quickly; omit `--hold` on the last command to reboot back to normal mode
 
 # How it works
 
@@ -69,28 +71,50 @@ mpairserver.start("SSID", "PASSWORD", logger="192.168.1.100:6000")
 # How to use
 
 ```
-mpair IP[:PORT] <command> [args]
+mpair IP[:PORT] <command> [args] [--hold]
 ```
 
 | Command | Description |
 |---|---|
-| `reset` | Reset the device |
-| `put <file> [file...]` | Upload file(s) to the device |
-| `get <file> [file...]` | Download file(s) from the device |
-| `ls` | List files on the device |
-| `rm <file> [file...]` | Delete file(s) from the device |
+| `reset` | Reset the device (hard reset via UDP command) |
+| `put <local_file> [remote_file]` | Upload a file to the device |
+| `get <remote_file> [local_file]` | Download a file from the device |
+| `ls [dir]` | List files on the device |
+| `tree [dir]` | Show a recursive file and directory tree |
+| `rm <file> [file...]` | Delete file(s) or directory(s) from the device |
 | `mkdir <dir> [dir...]` | Create directory(s) on the device |
+| `exit` | If device is in boot mode, then leave it and reboot to normal mode (no file operations) |
 | `logger [IP:PORT]` | Enable UDP log streaming to PC (omit IP:PORT to disable) |
 | `listen PORT` | Listen for incoming UDP log messages on PC |
+
+The `--hold` flag can be placed anywhere in the command. It keeps the device in boot mode after the command completes, so the next command can reconnect instantly without a full reboot cycle. End a hold session by running a command without `--hold`, or run `exit` (use `mpair IP --hold exit` to reconnect quickly if the device is already in boot mode, then reboot out).
+
+Paths with directories are supported — `put` auto-creates parent directories on the device, `get` auto-creates them locally. If the destination ends with `/`, the source filename is appended (e.g. `put main.py lib/` uploads as `lib/main.py`).
 
 **Examples:**
 
 ```bash
-# Upload files
-mpair 192.168.0.113 put main.py boot.py
+# Upload a file
+mpair 192.168.0.113 put main.py
+
+# Upload to a specific remote path
+mpair 192.168.0.113 put ./utils.py lib/utils.py
+
+# Upload multiple files quickly using --hold
+mpair 192.168.0.113 --hold put main.py
+mpair 192.168.0.113 --hold put boot.py
+mpair 192.168.0.113 put lib/utils.py
+
+# Leave boot mode after a --hold session (fast reconnect + reboot)
+mpair 192.168.0.113 --hold exit
 
 # List files
 mpair 192.168.0.113 ls
+mpair 192.168.0.113 ls lib
+
+# Recursive tree (optional root directory)
+mpair 192.168.0.113 tree
+mpair 192.168.0.113 tree lib
 
 # Stream logs: enable on device, then listen on PC
 mpair 192.168.0.113 logger 192.168.0.10:6000
@@ -100,11 +124,15 @@ mpair listen 6000
 mpair 192.168.0.113 reset
 ```
 
+# Caveats
+
+- **No security today** — there is no authentication or authorization. Anyone who can reach the device on the LAN (UDP command port and TCP boot-mode port) can reset the board, enter boot mode, run arbitrary code via the TCP channel, and read or change the filesystem. Treat the device as fully exposed on whatever network runs `mpairserver`.
+- **Development use only** — mpair is meant for trusted local development (home lab, isolated WiFi, or a VLAN you control). Do **not** rely on it in production deployments, on public networks, or anywhere an untrusted party could reach those ports.
+
 # TODO
 
-- Improve error handling
-- Support `src dst` paths for `get` and `put`
-- Add flag to keep bootmode, and 'exit' command
+- get/put directories
 - Add API for user app to be able to run logger
 - Support input for stdin?
 - Secure operations?
+- eval/exec for UDP?

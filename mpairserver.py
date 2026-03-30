@@ -132,13 +132,11 @@ def start(ssid, password, port = 8267, logger = None):
             conn, addr = s.accept()
             try:
                 while True:
-                    # 1. Read Header Length (4 bytes)
                     raw_len = conn.recv(4)
                     if not raw_len: break
                     header_len = struct.unpack('>I', raw_len)[0]
                     code = conn.recv(header_len).decode()
                     try:
-                        # Execute the code and capture any output
                         print("Executing client command...")
                         exec(code, {'conn': conn, 'machine': machine, 'os': os})
                     except Exception as e:
@@ -148,4 +146,7 @@ def start(ssid, password, port = 8267, logger = None):
                 print("Error:", e)
             finally:
                 conn.close()
-                machine.reset()
+                try:
+                    os.stat(".bootmode")
+                except OSError:
+                    machine.reset()
