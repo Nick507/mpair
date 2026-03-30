@@ -70,8 +70,8 @@ def connect_to_server():
 
     try:
         tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp_socket.connect((ESP_IP, PORT + 1))
         tcp_socket.settimeout(5.0)
+        tcp_socket.connect((ESP_IP, PORT + 1))
     except Exception as e:
         print(f"Failed to connect to mpair server: {e}")
         tcp_socket = None
@@ -90,7 +90,6 @@ def enter_bootmode():
     time.sleep(3) # Give ESP32-C3 time to reboot into Loader Mode
     
     if not connect_to_server():
-        print("FAIL TO CONNECT")
         return False
 
     send_code("conn.sendall('OK'.encode())")
@@ -523,7 +522,6 @@ def main():
             sys.exit(1)
         files = expand_local_patterns(args)
         if not enter_bootmode():
-            print("Failed to enter bootmode")
             sys.exit(1)
         put_files_and_commit(files)
         exit_bootmode()
@@ -533,7 +531,6 @@ def main():
             print("Usage: get <file> [file...]")
             sys.exit(1)
         if not enter_bootmode():
-            print("Failed to enter bootmode")
             sys.exit(1)
         remote_files = fetch_file_list()
         if remote_files is None:
@@ -546,7 +543,6 @@ def main():
 
     elif cmd == 'ls':
         if not enter_bootmode():
-            print("Failed to enter bootmode")
             sys.exit(1)
         list_files()
         exit_bootmode()
@@ -556,7 +552,6 @@ def main():
             print("Usage: rm <file> [file...]")
             sys.exit(1)
         if not enter_bootmode():
-            print("Failed to enter bootmode")
             sys.exit(1)
         delete_files(args)
         exit_bootmode()
@@ -566,7 +561,6 @@ def main():
             print("Usage: mkdir <dir> [dir...]")
             sys.exit(1)
         if not enter_bootmode():
-            print("Failed to enter bootmode")
             sys.exit(1)
         make_dirs(args)
         exit_bootmode()
