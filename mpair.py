@@ -273,6 +273,47 @@ except Exception as e:
 
 ##########################################################################################
 
+def cat_file(remote_file):
+    code = f"""
+import os, struct, json
+filename = '{remote_file}'
+try:
+    st = os.stat(filename)
+    if st[0] & 0x4000:
+        raise OSError("is a directory")
+    size = st[6]
+    res = json.dumps({{'status': 'success', 'size': size}}).encode()
+    conn.sendall(struct.pack('>I', len(res)) + res)
+    with open(filename, 'rb') as f:
+        while True:
+            chunk = f.read(1024)
+            if not chunk: break
+            conn.sendall(chunk)
+except Exception as e:
+    res = json.dumps({{'status': 'error', 'msg': str(e)}}).encode()
+    conn.sendall(struct.pack('>I', len(res)) + res)
+""".strip()
+
+    send_code(code)
+    response = receive_response()
+
+    if response and response.get('status') == 'success':
+        file_size = response['size']
+        remaining = file_size
+        out = sys.stdout.buffer
+        while remaining > 0:
+            chunk = tcp_socket.recv(min(remaining, 4096))
+            if not chunk:
+                break
+            out.write(chunk)
+            remaining -= len(chunk)
+        out.flush()
+        return True
+    print(f"Error: {response.get('msg', 'Unknown error')}", file=sys.stderr)
+    return False
+
+##########################################################################################
+
 def delete_files(files_to_delete):
     files_repr = repr(files_to_delete)
     
@@ -510,6 +551,7 @@ def print_help():
     print("  reset                           Reset the device")
     print("  put <local_file> [remote_file]  Upload a file to the device")
     print("  get <remote_file> [local_file]  Download a file from the device")
+    print("  cat <remote_file>               Print a remote file to stdout")
     print("  ls [dir]                        List files on the device")
     print("  tree [dir]                      Show file tree recursively")
     print("  rm <file> [file...]             Delete file(s) from the device")
@@ -620,6 +662,17 @@ def main():
         if not enter_bootmode(hold):
             sys.exit(1)
         get_file(remote_file, local_file)
+        if not hold:
+            exit_bootmode()
+
+    elif cmd == 'cat':
+        if len(args) != 1:
+            print("Usage: cat <remote_file>")
+            sys.exit(1)
+        remote_file = args[0].replace('\\', '/')
+        if not enter_bootmode(hold):
+            sys.exit(1)
+        cat_file(remote_file)
         if not hold:
             exit_bootmode()
 

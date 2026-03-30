@@ -79,6 +79,7 @@ mpair IP[:PORT] <command> [args] [--hold]
 | `reset` | Reset the device (hard reset via UDP command) |
 | `put <local_file> [remote_file]` | Upload a file to the device |
 | `get <remote_file> [local_file]` | Download a file from the device |
+| `cat <remote_file>` | Print a remote file to stdout |
 | `ls [dir]` | List files on the device |
 | `tree [dir]` | Show a recursive file and directory tree |
 | `rm <file> [file...]` | Delete file(s) or directory(s) from the device |
