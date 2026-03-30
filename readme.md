@@ -132,8 +132,11 @@ mpair 192.168.0.113 reset
 
 # TODO
 
+- add error handling, test negative cases
 - get/put directories
 - Add API for user app to be able to run logger
 - Support input for stdin?
 - Secure operations?
 - eval/exec for UDP?
+- support bulk commands
+- flag to disable temporary files during upload? (for cases where no free space)
