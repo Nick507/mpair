@@ -128,14 +128,26 @@ def start(ssid, password, port = 8267, logger = None):
         s.listen(1)
         print("MPAIR server started")
 
+        # On ESP8266 recv() is not guaranteed to return the exact number of bytes requested.
+        def recv_exact(conn, n):
+            buf = b''
+            while len(buf) < n:
+                chunk = conn.recv(n - len(buf))
+                if not chunk:
+                    return None
+                buf += chunk
+            return buf
+
         while True:
             conn, addr = s.accept()
             try:
                 while True:
-                    raw_len = conn.recv(4)
+                    raw_len = recv_exact(conn, 4)
                     if not raw_len: break
                     header_len = struct.unpack('>I', raw_len)[0]
-                    code = conn.recv(header_len).decode()
+                    raw_code = recv_exact(conn, header_len)
+                    if not raw_code: break
+                    code = raw_code.decode()
                     try:
                         print("Executing client command...")
                         exec(code, {'conn': conn, 'machine': machine, 'os': os})
