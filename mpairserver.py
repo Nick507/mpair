@@ -97,7 +97,7 @@ def start(ssid, password, port = 8267, logger = None):
     if wlan.isconnected():
         print("Connected! IP:", wlan.ifconfig()[0])
     else:
-        print("Connection failed.")
+        print("Connection failed, status:", wlan.status())
         return
 
     # Setup the socket
