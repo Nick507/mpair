@@ -25,7 +25,7 @@ mpair uses a two-channel approach:
 
 # Environment
 
-Tested on **ESP32-C3**.
+Tested on **ESP32-C3** and **ESP8266 (NodeMCU v3)**.
 
 # How to install
 
@@ -127,6 +127,7 @@ mpair 192.168.0.113 reset
 
 # Caveats
 
+- **UDP log streaming is unreliable** — logs are sent as UDP datagrams with no delivery guarantees. Packets can be dropped, reordered, or truncated under load, WiFi congestion, or buffer limits. Use it for casual debugging only. If you need dependable logs, implement your own logger (for example a small TCP client in your app that sends lines with acknowledgements or backpressure).
 - **No security today** — there is no authentication or authorization. Anyone who can reach the device on the LAN (UDP command port and TCP boot-mode port) can reset the board, enter boot mode, run arbitrary code via the TCP channel, and read or change the filesystem. Treat the device as fully exposed on whatever network runs `mpairserver`.
 - **Development use only** — mpair is meant for trusted local development (home lab, isolated WiFi, or a VLAN you control). Do **not** rely on it in production deployments, on public networks, or anywhere an untrusted party could reach those ports.
 
